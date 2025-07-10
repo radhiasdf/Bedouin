@@ -1,0 +1,36 @@
+[
+    {
+      "name": "Scorpion",
+      "sprite": "scorpion.png",
+      "health": 3,
+      "tags": ["poisonous", "light", "aggressive"]
+    },
+    {
+      "name": "Bandit",
+      "sprite": "bandit.png",
+      "health": 5,
+      "tags": ["greedy", "flammable", "melee"]
+    },
+    {
+      "name": "Cactus",
+      "sprite": "cactus.png",
+      "health": 999,
+      "tags": ["spiky", "flammable", "stationary"]
+    },
+    {
+      "name": "Dry Bush",
+      "sprite": "bush.png",
+      "tags": ["flammable", "light"]
+    },
+    {
+      "name": "Dune",
+      "sprite": "dune.png",
+      "tags": ["slippery", "sand"]
+    },
+    {
+      "name": "Oasis Water",
+      "sprite": "water.png",
+      "tags": ["wet", "puts-out-fire"]
+    }
+  ]
+  

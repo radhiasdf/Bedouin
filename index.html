@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Phaser 3 Camel Bounce</title>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.55.2/dist/phaser.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+        }
+
+        canvas {
+            display: block;
+        }
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka&display=swap" rel="stylesheet">
+
+</head>
+
+<body>
+    <script type="module" src="./behaviors.js"></script>
+
+    <script type="module">
+        import { allUpgrades, followTarget } from './behaviors.js';
+        import { createDustEffect } from './effects/createDustEffect.js';
+        import { showUpgradeMenu } from './upgradeMenu.js';
+        import { generatePerlinTexture } from './effects/perlin.js';
+        import { slipperyMovement } from './behaviors.js';
+
+        const config = {
+            type: Phaser.AUTO,
+            width: 800,
+            height: 600,
+            scale: {
+                mode: Phaser.Scale.FIT,
+                autoCenter: Phaser.Scale.CENTER_BOTH
+            },
+            render: {
+                pixelArt: false, // must be false for clean text
+                antialias: true
+            },
+            physics: {
+                default: 'arcade',
+                arcade: {
+                    gravity: { y: 0 },
+                    debug: false,
+                }
+            },
+            scene: {
+                preload,
+                create,
+                update
+            }
+        };
+
+        const game = new Phaser.Game(config);
+
+        // VARIABLES ///////////////////////////////////////////////
+
+        let player;
+        let cursors;
+        let wasd;
+        let camels = [];
+        let trailHistory = [];
+        let trailSpacing = 20; // Number of frames between each trail point
+        let tents, bushes;
+        let uKey;
+        let playerMoved = false;
+
+        let enemies;
+        let spawnRate = 0.02;
+        let updatePaused = false;
+
+        let projectiles;
+        let projectileDamage = 3;
+
+        let playerHealth = 5;
+        let healthText;
+        let playerHpBarBg, playerHpBar;
+        let playerMaxHealth = 5;
+
+        let lastDamageTime = 0;
+        let damageCooldown = 1000; // in milliseconds
+
+        let enemySpeed = 30;
+        let playerSpeed = 100;
+        let arrowSpeed = 300;
+
+        let lootGroup;
+        let exp = 0;
+        let level = 1;
+        let expNeeded = 4;
+        let expBar;
+        let expBarBg;
+
+        let killScore = 0;
+        let scoreText;
+        let levelText;
+
+        let gravity = 0.3;
+        
+        // NEW UPGRADE VARIABLES
+        let upgradeMenu;
+        let upgradeOptions = [];
+
+        function preload() {
+            this.load.image('player', 'assets/player.png');
+            this.load.image('camel', 'assets/camel.png');
+            this.load.image('tent', 'assets/tent.jpg');
+            this.load.image('bush', 'assets/bush.png');
+            this.load.image('heart', 'assets/heart.png');
+            this.load.image('arrow', 'assets/arrow.png');
+            this.load.image('loot', 'assets/loot.png');
+            this.load.image('shaytan1', 'assets/shaytan1.png');
+            this.load.image('shaytan2', 'assets/shaytan2.png');
+            this.load.image('groundpound', 'assets/groundpound.png');
+            this.load.image('mirage', 'assets/mirage.png');
+            this.load.image('spear', 'assets/spear.png');
+            this.load.image('cactus', 'assets/cactus.png');
+            this.load.image('stone', 'assets/stone.webp');
+            this.load.image('oil', 'assets/oil.jpg');
+            this.load.image('fire', 'assets/fire.png');
+            
+        }
+
+        function getUpgradeBehavior(name) {
+            const upg = allUpgrades.find(u => u.name === name);
+            return upg?.behavior || null;
+        }
+
+        function create() {
+            generatePerlinTexture(this, 'perlinMask', 256, 256);
+
+            cursors = this.input.keyboard.createCursorKeys();
+            wasd = this.input.keyboard.addKeys({
+                up: Phaser.Input.Keyboard.KeyCodes.W,
+                down: Phaser.Input.Keyboard.KeyCodes.S,
+                left: Phaser.Input.Keyboard.KeyCodes.A,
+                right: Phaser.Input.Keyboard.KeyCodes.D
+            });
+            uKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.U);
+
+            this.cameras.main.setBackgroundColor('#f9f5e3');
+
+            // PLAYER INIT
+            player = this.physics.add.image(300, 300, 'player').setScale(0.08, 0.08).setCollideWorldBounds(false);
+            playerHpBarBg = this.add.rectangle(config.width/2, config.height/2 - 35, 50, 6, 0x888888).setScrollFactor(0);
+            playerHpBar = this.add.rectangle(config.width/2, config.height/2 - 35, 50, 6, 0xff4444).setScrollFactor(0);
+            player.behaviors = [];
+            player.behaviors.push(getUpgradeBehavior("Stone"));
+            player.behaviors.push(getUpgradeBehavior("Splashing Oil"));
+            player.behaviors.push(slipperyMovement.behavior);
+
+            player.tamed = true; // To appear as available to upgrade
+            player.image = 'player';
+
+
+            const positions = [
+            [600, 300],
+                [650, 340],
+                [620, 380],
+                [580, 320],[600, 300],
+                [650, 340],
+                [620, 380],
+                [580, 320],[600, 300],
+                [650, 340],
+                [620, 380],
+                [580, 320]
+            ];
+
+            // CAMEL INIT
+
+            positions.forEach(pos => {
+                const camel = this.add.image(pos[0], pos[1], 'camel').setScale(0.06, 0.06);
+                camel.vyBounce = Phaser.Math.Between(-5, -2);
+                camel.vx = 0;
+                camel.groundY = camel.y;
+                camel.following = false; // FOR DEBUG, SET TO TRUE
+                camel.tamed = false; // FOR DEBUG, SET TO TRUE
+                camel.heart = null;
+                camel.trailIndex = null;
+                camel.behaviors = [];
+                camels.push(camel);
+                camel.image = 'camel';
+            });
+
+            // CAMEL TAMING TIP UI /////////////////////////////////
+            this.tameTipContainer = this.add.container(0, 0).setScrollFactor(0).setDepth(1); // depth ensures it's above enemies etc
+
+            const tameTipBg = this.add.rectangle(20, config.height - 100, 500, 60, 0xffffff)
+                .setOrigin(0, 0)
+                .setStrokeStyle(2, 0x000000)
+                .setScrollFactor(0);
+
+            const tameTipText = this.add.text(30, config.height - 90, "Get close to a camel and press E to tame!", {
+                fontSize: '18px',
+                fontFamily: 'Fredoka',
+                fill: '#000'
+            }).setScrollFactor(0);
+
+            const camelIcon = this.add.image(480, config.height - 70, 'camel') // to the right
+                .setScale(0.07, 0.07)
+                .setScrollFactor(0);
+
+            this.tameTipContainer.add([tameTipBg, tameTipText, camelIcon]);
+
+
+            // TENTS AND BUSHES ///////////////////////////////////////////
+
+            tents = this.add.group();
+            [[100, 400], [200, 600], [400, 100]].forEach(([x, y]) => {
+                tents.create(x, y, 'tent').setDisplaySize(50, 50);
+            });
+
+            bushes = this.add.group();
+            [[900, 300], [400, 750], [500, 900]].forEach(([x, y]) => {
+                bushes.create(x, y, 'bush').setDisplaySize(30, 30);
+            });
+
+            this.cameras.main.startFollow(player);
+
+            // ENEMY INIT
+            enemies = this.physics.add.group();
+            projectiles = this.physics.add.group();
+            this.enemies = enemies;
+            this.projectiles = projectiles;
+            this.player = player;
+            this.camels = camels;
+            this.updatePaused = updatePaused;
+            this.cursors = cursors;
+            this.wasd = wasd;
+
+            this.physics.add.overlap(projectiles, enemies, handleProjectileHit, null, this);
+
+            lootGroup = this.physics.add.group();
+
+            this.physics.add.overlap(player, lootGroup, collectLoot, null, this);
+
+            const barWidth = config.width - 40;
+            expBarBg = this.add.rectangle(20, 20, barWidth, 20, 0x555555).setOrigin(0).setScrollFactor(0);
+            expBar = this.add.rectangle(20, 20, 0, 20, 0x00cc00).setOrigin(0).setScrollFactor(0);
+            
+            scoreText = this.add.text(config.width - 150, 50, 'Kills: 0', {
+                fontSize: '20px',
+                fontFamily: 'Fredoka',
+                fill: '#000'
+            }).setScrollFactor(0);
+
+            levelText = this.add.text(50, 50, 'Level: 1', {
+                fontSize: '20px',
+                fontFamily: 'Fredoka',
+                fill: '#000'
+            }).setScrollFactor(0);
+
+            // DEBUG SETTINGS, DELETE WHEN DONE
+            //showUpgradeMenu(this);
+            this.applyDamage = applyDamage;
+        }
+
+        // ENEMY DAMAGE ////////////////////////////////////////
+        function applyDamage(enemy, damage = 1) {
+            if (!enemy.active) return;
+
+            enemy.health = (enemy.health || 3) - damage;
+
+            // Flash red
+            enemy.setTintFill(0xff0000);
+            setTimeout(() => {
+                if (enemy.active) enemy.clearTint();
+            }, 800);
+
+            if (enemy.health <= 0) {
+                const loot = lootGroup.create(enemy.x, enemy.y, 'loot').setDisplaySize(50, 50);
+                loot.setBounce(0.3);
+                killScore++;
+                scoreText.setText('Kills: ' + killScore);
+                enemy.destroy();
+            }
+        }
+
+        // PROJECTILE HIT ////////////////////////////////////////////
+        function handleProjectileHit(proj, enemy) {
+            if (!proj.active || !enemy.active) return;
+            proj.destroy();
+            applyDamage(enemy, projectileDamage);
+        }
+
+        function collectLoot(player, loot) {
+                loot.destroy();
+                exp++;
+
+                // LEVEL UP CHECK /////////////////////////////////////////////
+                if (exp >= expNeeded) {
+                    exp = 0;
+                    level++;
+                    levelText.setText('Level: ' + level);
+                    expNeeded = 2 ** (level+1); // 4, 6, 8, ...
+                    spawnRate += 0.02;
+                    showUpgradeMenu(this, config, player, camels, allUpgrades);
+                }
+
+                // Update EXP bar width (max 200px)
+                const barFullWidth = config.width - 40;
+                expBar.width = barFullWidth * (exp / expNeeded);
+        }
+
+        function spawn(entity, spawnRate){
+
+        }
+
+        
+        ///////////////////// UPDATE /////////////////////////////////////////
+
+        function update() {
+            // DEBUG SHORTCUT KEYS
+            if (Phaser.Input.Keyboard.JustDown(uKey)) showUpgradeMenu(this, config, player, camels, allUpgrades);
+
+            if(this.updatePaused){
+                return;
+            }
+
+            // player.setVelocity(0);
+
+            // if (cursors.left.isDown || wasd.left.isDown) {
+            //     player.setVelocityX(-playerSpeed);
+            //     player.setFlipX(true);
+            // }
+            // if (cursors.right.isDown || wasd.right.isDown) {
+            //     player.setVelocityX(playerSpeed);
+            //     player.setFlipX(false);
+            // }
+            // if (cursors.up.isDown || wasd.up.isDown) player.setVelocityY(-playerSpeed);
+            // if (cursors.down.isDown || wasd.down.isDown) player.setVelocityY(playerSpeed);
+            
+            
+            // PLAYER STARTS WITH THIS WEAPON ///////////////////////
+            
+            player.behaviors.forEach(behavior => behavior(this, player));
+
+
+            // For trailing, Add current player position to trailHistory
+            
+            if(player.body.velocity.x !== 0 || player.body.velocity.y !== 0){
+                trailHistory.unshift({ x: player.x, y: player.y });
+                if (trailHistory.length > camels.length * trailSpacing + 1) {
+                    trailHistory.pop();
+                }
+            }
+
+            // ENEMY SPAWNING //////////////////////////////////////////
+            if (Math.random() < spawnRate) {
+                const side = Phaser.Math.Between(0, 3); // 0=left, 1=right, 2=top, 3=bottom
+                let spawnX, spawnY;
+
+                switch (side) {
+                    case 0: // Left
+                        spawnX = player.x - Phaser.Math.Between(600, 800);
+                        spawnY = player.y + Phaser.Math.Between(-300, 300);
+                        break;
+                    case 1: // Right
+                        spawnX = player.x + Phaser.Math.Between(600, 800);
+                        spawnY = player.y + Phaser.Math.Between(-300, 300);
+                        break;
+                    case 2: // Top
+                        spawnX = player.x + Phaser.Math.Between(-300, 300);
+                        spawnY = player.y - Phaser.Math.Between(600, 800);
+                        break;
+                    case 3: // Bottom
+                        spawnX = player.x + Phaser.Math.Between(-300, 300);
+                        spawnY = player.y + Phaser.Math.Between(600, 800);
+                        break;
+                }
+
+                const enemy = enemies.create(spawnX, spawnY, 'shaytan1').setDisplaySize(50, 50);
+                enemy.health = 3;
+                enemy.setBounce(1);
+                enemy.setVelocity(0); // Ensure it can move
+                enemy.body.moves = true; // ✅ important
+
+                enemy.getTarget = (scene) => {
+                    console.log("scene.currentMirage:", scene.currentMirage);
+                    console.log("scene.player:", scene.player);
+
+                    if (scene.currentMirage && scene.time.now < scene.mirageExpiresAt) {
+                        console.log("Following mirage");
+                        return scene.currentMirage;
+                    }
+                    console.log("Following player");
+                    return scene.player;
+                };
+
+                enemy.followSpeed = enemySpeed;
+                enemy.behaviors = [followTarget.behavior, getUpgradeBehavior("Ground Pound")];
+            }
+            
+
+            // CAMEL BEHAVIOR UPDATE //////////////////////////////////////////////////
+            camels.forEach((camel, i) => {
+                const dist = Phaser.Math.Distance.Between(player.x, player.y, camel.x, camel.y);
+
+                if (!camel.tamed) {
+                    if (Math.random() < 0.02) {
+                        camel.x += Phaser.Math.Between(-3, 3);
+                        camel.y += Phaser.Math.Between(-3, 3);
+                    }
+
+                    if (dist < 60) {
+                        camel.tamed = true;
+                        camel.following = true;
+
+                        if (camels.filter(c => c.tamed).length === 1) {
+                            this.tameTipContainer.setVisible(false);
+                        }
+
+                        camel.heart = player.scene.add.image(camel.x, camel.y - 40, 'heart').setDisplaySize(50, 50);
+                        player.scene.tweens.add({
+                            targets: camel.heart,
+                            y: camel.heart.y - 30,
+                            alpha: 0,
+                            duration: 800,
+                            onComplete: () => camel.heart.destroy()
+                        });
+
+                        camel.trailIndex = (i + 1) * trailSpacing;
+                    }
+                }
+
+                if (camel.tamed && camel.trailIndex !== null) {
+                    const targetPos = trailHistory[camel.trailIndex];
+                    if (targetPos) {
+                        camel.x = targetPos.x;
+                        camel.groundY = targetPos.y;
+
+                        if (trailHistory[camel.trailIndex - 1]) {
+                            camel.setFlipX(camel.x > trailHistory[camel.trailIndex - 1].x);
+                        }
+
+                        // Bouncing
+                        camel.vyBounce += gravity;
+                        camel.y += camel.vyBounce;
+                        if (camel.y > camel.groundY) {
+                            camel.y = camel.groundY;
+                            camel.vyBounce = -(camel.bouncePower || 1 + Math.random());
+                        }
+
+                    }
+                } else if (!camel.tamed) {
+                    camel.vyBounce += gravity;
+                    camel.y += camel.vyBounce;
+                    camel.x += camel.vx;
+                    if (camel.y > camel.groundY) {
+                        camel.y = camel.groundY;
+                        camel.vyBounce = - Math.random() * 10;
+                        camel.vx = -5 + Math.random() * 10;
+                        camel.setFlipX(camel.vx < 0);
+                    }
+                }
+
+                // === Run all camel behaviors every frame ===
+                camels.forEach(camel => {
+                    if (!camel.tamed || !camel.behaviors) return;
+                    camel.behaviors.forEach(behavior => behavior(this, camel));
+                });
+
+            });
+
+            // ENEMY MOVEMENT AND PLAYER COLLISION ////////////
+
+            const now = this.time.now; // current game time
+
+            enemies.getChildren().forEach(enemy => {
+                
+                if (!enemy.active) return;
+
+                enemy.setFlipX(enemy.vx < 0);
+
+                enemy.behaviors?.forEach(b => b(this, enemy));
+
+                const distToPlayer = Phaser.Math.Distance.Between(enemy.x, enemy.y, player.x, player.y);
+                if (distToPlayer < 30 && now - lastDamageTime > damageCooldown) {
+                    playerHealth--;
+                    playerHpBar.width = 60 * (playerHealth / playerMaxHealth);
+                    lastDamageTime = now;
+
+                    player.setTint(0xff0000);
+                    this.time.delayedCall(200, () => player.clearTint(), [], this);
+
+                    if (playerHealth <= 0) {
+                        player.setTint(0xff0000);
+                        this.scene.pause();
+                    }
+                }
+            });
+
+        }
+    </script>
+</body>
+
+</html>
